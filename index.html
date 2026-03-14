@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BICAN Antibody Browser</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; background: #f5f6f8; color: #1a1a2e; }
@@ -48,7 +49,6 @@ tr.clickable { cursor: pointer; }
 .empty-val { color: #c0c5d8; font-style: italic; font-size: 12px; }
 .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; display: block; }
 
-/* Loading / error states */
 .state-wrap { display: flex; align-items: center; justify-content: center; min-height: 300px; }
 .state-msg { text-align: center; color: #7a8299; font-size: 14px; }
 .state-msg .icon { font-size: 36px; margin-bottom: 14px; }
@@ -56,7 +56,6 @@ tr.clickable { cursor: pointer; }
 .spinner { width: 32px; height: 32px; border: 3px solid #e8eaf0; border-top-color: #4f6ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 14px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Detail panel */
 .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 100; align-items: center; justify-content: center; }
 .overlay.open { display: flex; }
 .detail-panel { background: white; border-radius: 12px; padding: 28px; max-width: 640px; width: 90%; max-height: 85vh; overflow-y: auto; position: relative; }
@@ -139,30 +138,169 @@ tr.clickable { cursor: pointer; }
   </div>
 </div>
 
-<!-- Detail overlay -->
 <div class="overlay" id="overlay" onclick="closeDetail(event)">
-  <div class="detail-panel" id="detailPanel">
+  <div class="detail-panel">
     <button class="detail-close" onclick="document.getElementById('overlay').classList.remove('open')">&#10005;</button>
     <div id="detailContent"></div>
   </div>
 </div>
 
 <script>
-// ── CONFIGURATION ────────────────────────────────────────────────────────────
-// When hosted on GitHub Pages, this path is relative — just keep it as-is.
-// Place your exported CSV file named exactly "data.csv" in the same folder.
-const DATA_URL = "data.csv";
-// ─────────────────────────────────────────────────────────────────────────────
+// ── CONFIGURATION ─────────────────────────────────────────────────────────────
+// Set to "data.xlsx" or "data.csv" depending on which file you upload to GitHub
+const DATA_FILE = "data.xlsx";
 
-let rawData = [], filtered = [], sortCol = "", sortDir = 1;
+// ── Vendor catalog URL patterns ───────────────────────────────────────────────
+const VENDOR_URLS = {
+  "addgene":              "https://www.addgene.org/{ID}/",
+  "dshb":                 "https://dshb.biology.uiowa.edu/{ID}",
+  "developmental studies hybridoma bank": "https://dshb.biology.uiowa.edu/{ID}",
+  "cell signaling":       "https://www.cellsignal.com/products/{ID}",
+  "cell signaling technology": "https://www.cellsignal.com/products/{ID}",
+  "cst":                  "https://www.cellsignal.com/products/{ID}",
+  "abcam":                "https://www.abcam.com/products/{ID}",
+  "sigma":                "https://www.sigmaaldrich.com/catalog/product/{ID}",
+  "sigma-aldrich":        "https://www.sigmaaldrich.com/catalog/product/{ID}",
+  "millipore":            "https://www.emdmillipore.com/US/en/product/{ID}",
+  "bd biosciences":       "https://www.bdbiosciences.com/us/reagents/research/antibodies/{ID}",
+  "bd":                   "https://www.bdbiosciences.com/us/reagents/research/antibodies/{ID}",
+  "biolegend":            "https://www.biolegend.com/en-us/products/{ID}",
+  "santa cruz":           "https://www.scbt.com/p/{ID}",
+  "santa cruz biotechnology": "https://www.scbt.com/p/{ID}",
+  "thermo fisher":        "https://www.thermofisher.com/antibody/product/{ID}",
+  "thermofisher":         "https://www.thermofisher.com/antibody/product/{ID}",
+  "invitrogen":           "https://www.thermofisher.com/antibody/product/{ID}",
+  "r&d systems":          "https://www.rndsystems.com/products/{ID}",
+  "novus":                "https://www.novusbio.com/products/{ID}",
+  "novus biologicals":    "https://www.novusbio.com/products/{ID}",
+  "proteintech":          "https://www.ptglab.com/products/{ID}.html",
+  "synaptic systems":     "https://www.sysy.com/products/{ID}.html",
+  "jackson immunoresearch": "https://www.jacksonimmuno.com/catalog/products/{ID}",
+};
+
+function getCatalogUrl(vendor, catalogNum) {
+  if (!vendor || !catalogNum) return null;
+  const key = vendor.toLowerCase().trim();
+  for (const [name, pattern] of Object.entries(VENDOR_URLS)) {
+    if (key.includes(name)) return pattern.replace("{ID}", catalogNum.trim());
+  }
+  return null;
+}
 
 function parseApps(str) {
   if (!str) return [];
   return str.split(/[,;\/\n]/).map(s => s.trim()).filter(Boolean);
 }
 
-function parseRow(row) {
+function isUrl(s) { return s && (s.startsWith("http://") || s.startsWith("https://")); }
+
+function extractUrl(s) {
+  if (!s) return null;
+  const match = s.match(/https?:\/\/[^\s]+/);
+  return match ? match[0] : null;
+}
+
+function stripUrl(s) {
+  if (!s) return s;
+  return s.replace(/https?:\/\/[^\s]+/, "").trim().replace(/^[-–:,]+|[-–:,]+$/g, "").trim();
+}
+
+let rawData = [], filtered = [], sortCol = "", sortDir = 1;
+
+// ── Excel parsing (preserves hyperlinks) ─────────────────────────────────────
+function parseExcel(buffer) {
+  const wb = XLSX.read(buffer, { type: "array", cellStyles: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+
+  // Build header map from row 0
+  const headers = {};
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+    if (cell && cell.v) headers[c] = cell.v.toString().trim();
+  }
+
+  // Helper: get cell value + hyperlink if present
+  function getCell(r, c) {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const cell = ws[addr];
+    if (!cell) return { text: "", url: null };
+    const text = cell.v !== undefined ? cell.v.toString().trim() : "";
+    const url = cell.l && cell.l.Target ? cell.l.Target : null;
+    return { text, url };
+  }
+
+  // Find column index by matching header names
+  function colIdx(names) {
+    for (const [idx, h] of Object.entries(headers)) {
+      for (const name of names) {
+        if (h.toLowerCase().trim() === name.toLowerCase()) return parseInt(idx);
+      }
+    }
+    return -1;
+  }
+
+  const cols = {
+    num:      colIdx(["number","#"]),
+    name:     colIdx(["antibody name","name"]),
+    uniprot:  colIdx(["uniprot accession number (target ag)","uniprot accession","uniprot"]),
+    target:   colIdx(["target name / protein biomarker","target name","target","protein biomarker"]),
+    agNotes:  colIdx(["ag notes (epitope or modified forms)","ag notes","epitope"]),
+    species:  colIdx(["target species","species"]),
+    host:     colIdx(["host organism & isotype","host organism and isotype","host & isotype","host"]),
+    format:   colIdx(["format (recombinant? monoclonal?)","format"]),
+    vendor:   colIdx(["vendor"]),
+    catalog:  colIdx(["catalog number (and link)","catalog number","catalog #","catalog"]),
+    rrid:     colIdx(["rrid"]),
+    apps:     colIdx(["validated in these applications","applications","apps"]),
+    valData1: colIdx(["validation data link and notes","validation data"]),
+    valBy1:   colIdx(["validated by"]),
+    valData2: colIdx(["1. validation data link and notes ","1. validation data link and notes","1. validation data"]),
+    valBy2:   colIdx(["1. validated by"]),
+    valData3: colIdx(["2. validation data link and notes","2. validation data"]),
+    valBy3:   colIdx(["2. validated by"]),
+  };
+
+  const rows = [];
+  for (let r = 1; r <= range.e.r; r++) {
+    const g = key => cols[key] >= 0 ? getCell(r, cols[key]) : { text: "", url: null };
+    const nameCell = g("name");
+    if (!nameCell.text) continue;
+
+    const valCell1 = g("valData1"), valCell2 = g("valData2"), valCell3 = g("valData3");
+
+    rows.push({
+      num:           g("num").text,
+      antibodyName:  nameCell.text,
+      uniprotAcc:    g("uniprot").text,
+      targetName:    g("target").text,
+      agNotes:       g("agNotes").text,
+      targetSpecies: parseApps(g("species").text),
+      hostIsotype:   g("host").text,
+      format:        g("format").text,
+      vendor:        g("vendor").text,
+      catalogNum:    g("catalog").text,
+      catalogUrl:    g("catalog").url,
+      rrid:          g("rrid").text,
+      apps:          parseApps(g("apps").text),
+      valData1:      valCell1.text,
+      valUrl1:       valCell1.url || extractUrl(valCell1.text),
+      valBy1:        g("valBy1").text,
+      valData2:      valCell2.text,
+      valUrl2:       valCell2.url || extractUrl(valCell2.text),
+      valBy2:        g("valBy2").text,
+      valData3:      valCell3.text,
+      valUrl3:       valCell3.url || extractUrl(valCell3.text),
+      valBy3:        g("valBy3").text,
+    });
+  }
+  return rows;
+}
+
+// ── CSV parsing (fallback) ────────────────────────────────────────────────────
+function parseCSVRow(row) {
   const g = k => (row[k] || "").toString().trim();
+  const v1 = g("Validation Data link and notes"), v2 = g("1. Validation Data link and notes "), v3 = g("2. Validation Data link and notes");
   return {
     num:           g("Number"),
     antibodyName:  g("Antibody Name"),
@@ -174,38 +312,42 @@ function parseRow(row) {
     format:        g("Format (recombinant? monoclonal?)"),
     vendor:        g("Vendor"),
     catalogNum:    g("Catalog Number (and link)"),
+    catalogUrl:    null,
     rrid:          g("RRID"),
     apps:          parseApps(g("Validated in these applications")),
-    valData1:      g("Validation Data link and notes"),
-    valBy1:        g("Validated By"),
-    valData2:      g("1. Validation Data link and notes "),
-    valBy2:        g("1. Validated By"),
-    valData3:      g("2. Validation Data link and notes"),
-    valBy3:        g("2. Validated By"),
+    valData1: v1, valUrl1: extractUrl(v1), valBy1: g("Validated By"),
+    valData2: v2, valUrl2: extractUrl(v2), valBy2: g("1. Validated By"),
+    valData3: v3, valUrl3: extractUrl(v3), valBy3: g("2. Validated By"),
   };
 }
 
-function isUrl(s) { return s && (s.startsWith("http://") || s.startsWith("https://")); }
-
 async function loadData() {
   try {
-    const resp = await fetch(DATA_URL + "?v=" + Date.now());
+    const resp = await fetch(DATA_FILE + "?v=" + Date.now());
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const csv = await resp.text();
-    Papa.parse(csv, {
-      header: true,
-      skipEmptyLines: true,
-      complete: function(result) {
-        rawData = result.data.map(parseRow).filter(r => r.antibodyName);
-        filtered = [...rawData];
-        document.getElementById("loadingState").style.display = "none";
-        document.getElementById("mainUI").style.display = "block";
-        document.getElementById("lastUpdated").textContent = "Data loaded " + new Date().toLocaleDateString(undefined, {month:"short",day:"numeric",year:"numeric"});
-        populateFilters();
-        updateStats();
-        render();
-      }
-    });
+
+    const isXlsx = DATA_FILE.endsWith(".xlsx") || DATA_FILE.endsWith(".xls");
+
+    if (isXlsx) {
+      const buffer = await resp.arrayBuffer();
+      rawData = parseExcel(new Uint8Array(buffer));
+    } else {
+      const csv = await resp.text();
+      await new Promise(resolve => {
+        Papa.parse(csv, {
+          header: true, skipEmptyLines: true,
+          complete: r => { rawData = r.data.map(parseCSVRow).filter(x => x.antibodyName); resolve(); }
+        });
+      });
+    }
+
+    filtered = [...rawData];
+    document.getElementById("loadingState").style.display = "none";
+    document.getElementById("mainUI").style.display = "block";
+    document.getElementById("lastUpdated").textContent = "Updated " + new Date().toLocaleDateString(undefined, { month:"short", day:"numeric", year:"numeric" });
+    populateFilters();
+    updateStats();
+    render();
   } catch(e) {
     document.getElementById("loadingState").innerHTML = `
       <div class="state-msg error">
@@ -224,8 +366,9 @@ function render() {
     tbody.innerHTML = `<tr><td colspan="12" class="empty-state">No antibodies match your filters.</td></tr>`;
     return;
   }
-  tbody.innerHTML = filtered.map((r, i) => `
-    <tr class="clickable" onclick="showDetail(${rawData.indexOf(r)})">
+  tbody.innerHTML = filtered.map((r, i) => {
+    const catUrl = r.catalogUrl || getCatalogUrl(r.vendor, r.catalogNum);
+    return `<tr class="clickable" onclick="showDetail(${rawData.indexOf(r)})">
       <td style="color:#9aa5b8;font-size:12px;">${r.num || i+1}</td>
       <td style="font-weight:500;color:#2a2e4a;min-width:160px;">${r.antibodyName}</td>
       <td style="min-width:140px;">${r.targetName || '<span class="empty-val">—</span>'}</td>
@@ -234,29 +377,35 @@ function render() {
       <td><span class="truncate" title="${r.hostIsotype}">${r.hostIsotype || '<span class="empty-val">—</span>'}</span></td>
       <td>${r.format || '<span class="empty-val">—</span>'}</td>
       <td>${r.vendor || '<span class="empty-val">—</span>'}</td>
-      <td style="font-family:monospace;font-size:12px;">${r.catalogNum || '<span class="empty-val">—</span>'}</td>
+      <td style="font-family:monospace;font-size:12px;">${r.catalogNum ? (catUrl ? `<a class="rrid-link" href="${catUrl}" target="_blank" onclick="event.stopPropagation()">${r.catalogNum}</a>` : r.catalogNum) : '<span class="empty-val">—</span>'}</td>
       <td>${r.rrid ? `<a class="rrid-link" href="https://scicrunch.org/resolver/${r.rrid}" target="_blank" onclick="event.stopPropagation()">${r.rrid}</a>` : '<span class="empty-val">—</span>'}</td>
       <td><div class="app-tags">${r.apps.map(a=>`<span class="app-tag">${a}</span>`).join("") || '<span class="empty-val">—</span>'}</div></td>
       <td><button class="detail-btn" onclick="event.stopPropagation();showDetail(${rawData.indexOf(r)})">View &#8594;</button></td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 function showDetail(idx) {
   const r = rawData[idx];
+  const catUrl = r.catalogUrl || getCatalogUrl(r.vendor, r.catalogNum);
+
   const field = (label, val, link) => {
     const display = val || '<span style="color:#c0c5d8;font-style:italic;">Not provided</span>';
     const wrapped = (link && val) ? `<a href="${link}" target="_blank">${val}</a>` : display;
     return `<div class="detail-field"><div class="detail-field-label">${label}</div><div class="detail-field-value">${wrapped}</div></div>`;
   };
-  const valBlock = (title, data, by) => {
+
+  const valBlock = (title, data, url, by) => {
     if (!data && !by) return "";
-    const dataHtml = data ? (isUrl(data) ? `<a href="${data}" target="_blank">View validation data &#8599;</a>` : `<span style="font-size:12px;line-height:1.5;">${data}</span>`) : '<span style="color:#c0c5d8;font-style:italic;font-size:12px;">No link provided</span>';
+    const notes = url ? stripUrl(data) : data;
     return `<div class="val-block">
       <div class="val-block-title">${title}</div>
-      <div style="font-size:12px;color:#2a2e4a;margin-bottom:4px;">${dataHtml}</div>
-      ${by ? `<div style="font-size:11px;color:#7a8299;">Validated by: <strong>${by}</strong></div>` : ""}
+      ${notes ? `<div style="font-size:12px;line-height:1.6;color:#2a2e4a;margin-bottom:4px;">${notes}</div>` : ""}
+      ${url ? `<a href="${url}" target="_blank" style="font-size:12px;color:#4f6ef7;text-decoration:none;">View validation data &#8599;</a>` : ""}
+      ${by ? `<div style="font-size:11px;color:#7a8299;margin-top:6px;">Validated by: <strong>${by}</strong></div>` : ""}
     </div>`;
   };
+
   document.getElementById("detailContent").innerHTML = `
     <div class="detail-name">${r.antibodyName}</div>
     <div class="detail-sub">${[r.targetName, r.hostIsotype, r.format].filter(Boolean).join(" &nbsp;·&nbsp; ")}</div>
@@ -275,16 +424,16 @@ function showDetail(idx) {
         ${field("Host Organism & Isotype", r.hostIsotype)}
         ${field("Format", r.format)}
         ${field("Vendor", r.vendor)}
-        ${field("Catalog Number", r.catalogNum)}
+        ${field("Catalog Number", r.catalogNum, catUrl)}
         ${field("RRID", r.rrid, r.rrid ? `https://scicrunch.org/resolver/${r.rrid}` : null)}
         ${field("Applications", r.apps.join(", "))}
       </div>
     </div>
     <div class="detail-section">
       <div class="detail-section-title">Validation Data</div>
-      ${valBlock("Primary Validation", r.valData1, r.valBy1)}
-      ${valBlock("Validation Entry 2", r.valData2, r.valBy2)}
-      ${valBlock("Validation Entry 3", r.valData3, r.valBy3)}
+      ${valBlock("Primary Validation", r.valData1, r.valUrl1, r.valBy1)}
+      ${valBlock("Validation Entry 2", r.valData2, r.valUrl2, r.valBy2)}
+      ${valBlock("Validation Entry 3", r.valData3, r.valUrl3, r.valBy3)}
       ${!r.valData1 && !r.valData2 && !r.valData3 ? '<p style="font-size:13px;color:#c0c5d8;font-style:italic;">No validation data recorded.</p>' : ""}
     </div>`;
   document.getElementById("overlay").classList.add("open");
@@ -297,7 +446,7 @@ function closeDetail(e) {
 function updateStats() {
   document.getElementById("statTotal").textContent = rawData.length;
   document.getElementById("statTargets").textContent = new Set(rawData.map(r=>r.targetName).filter(Boolean)).size;
-  document.getElementById("statValidated").textContent = rawData.filter(r=>r.valData1||r.valData2||r.valData3).length;
+  document.getElementById("statValidated").textContent = rawData.filter(r=>r.valUrl1||r.valUrl2||r.valUrl3||r.valData1||r.valData2||r.valData3).length;
   document.getElementById("statVendors").textContent = new Set(rawData.map(r=>r.vendor).filter(Boolean)).size;
   document.getElementById("statSpecies").textContent = new Set(rawData.flatMap(r=>r.targetSpecies).filter(Boolean)).size;
 }
