@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BICAN Antibody Browser</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; background: #f5f6f8; color: #1a1a2e; }
+
+header { background: #1a1a2e; color: white; padding: 16px 28px; display: flex; align-items: center; gap: 14px; }
+.logo-icon { width:36px;height:36px;background:#4f6ef7;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:white;flex-shrink:0; }
+.logo-title { font-size: 19px; font-weight: 600; }
+.logo-sub { font-size: 11px; color: #8899bb; margin-top: 2px; letter-spacing: 0.5px; text-transform: uppercase; }
+.last-updated { margin-left: auto; font-size: 11px; color: #8899bb; }
+
+.top-bar { background: white; border-bottom: 1px solid #e8eaf0; padding: 12px 28px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.search-wrap { position: relative; flex: 1; min-width: 180px; }
+.search-wrap input { width: 100%; padding: 8px 12px 8px 32px; border: 1px solid #dde1ea; border-radius: 6px; font-size: 13px; outline: none; background: #f8f9fc; }
+.search-wrap input:focus { border-color: #4f6ef7; background: white; }
+.search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: #9aa5b8; font-size: 13px; }
+select { padding: 7px 9px; border: 1px solid #dde1ea; border-radius: 6px; font-size: 13px; background: #f8f9fc; color: #1a1a2e; outline: none; cursor: pointer; }
+.btn-reset { padding: 7px 12px; border: 1px solid #dde1ea; border-radius: 6px; font-size: 13px; background: white; cursor: pointer; color: #555; }
+.btn-reset:hover { background: #f0f2f8; }
+
+.stats-bar { display: flex; gap: 10px; padding: 12px 28px; flex-wrap: wrap; }
+.stat-card { background: white; border: 1px solid #e8eaf0; border-radius: 8px; padding: 10px 16px; min-width: 120px; }
+.stat-label { font-size: 11px; color: #7a8299; text-transform: uppercase; letter-spacing: 0.4px; }
+.stat-value { font-size: 22px; font-weight: 600; color: #1a1a2e; margin-top: 2px; }
+
+.table-wrap { padding: 0 28px 32px; overflow-x: auto; }
+.result-count { font-size: 12px; color: #7a8299; padding: 6px 0 4px 2px; }
+table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; border: 1px solid #e8eaf0; font-size: 13px; min-width: 900px; }
+thead { background: #f0f2f8; }
+th { padding: 10px 13px; text-align: left; font-weight: 600; color: #4a5072; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; cursor: pointer; white-space: nowrap; user-select: none; }
+th:hover { color: #4f6ef7; }
+.sort-arrow { color: #c0c5d8; margin-left: 3px; }
+td { padding: 9px 13px; border-top: 1px solid #f0f2f8; vertical-align: middle; max-width: 200px; }
+tr:hover td { background: #f8f9fc; }
+tr.clickable { cursor: pointer; }
+
+.app-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.app-tag { background: #eef0f8; color: #4a5280; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.rrid-link, .detail-btn, .uniprot-link { color: #4f6ef7; text-decoration: none; font-size: 12px; }
+.rrid-link:hover, .uniprot-link:hover { text-decoration: underline; }
+.detail-btn { cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; }
+.empty-val { color: #c0c5d8; font-style: italic; font-size: 12px; }
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; display: block; }
+
+/* Loading / error states */
+.state-wrap { display: flex; align-items: center; justify-content: center; min-height: 300px; }
+.state-msg { text-align: center; color: #7a8299; font-size: 14px; }
+.state-msg .icon { font-size: 36px; margin-bottom: 14px; }
+.state-msg.error { color: #c0392b; }
+.spinner { width: 32px; height: 32px; border: 3px solid #e8eaf0; border-top-color: #4f6ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Detail panel */
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 100; align-items: center; justify-content: center; }
+.overlay.open { display: flex; }
+.detail-panel { background: white; border-radius: 12px; padding: 28px; max-width: 640px; width: 90%; max-height: 85vh; overflow-y: auto; position: relative; }
+.detail-close { position: absolute; top: 16px; right: 18px; font-size: 20px; cursor: pointer; color: #9aa5b8; background: none; border: none; line-height: 1; }
+.detail-close:hover { color: #1a1a2e; }
+.detail-name { font-size: 17px; font-weight: 600; color: #1a1a2e; margin-bottom: 4px; padding-right: 24px; }
+.detail-sub { font-size: 13px; color: #7a8299; margin-bottom: 20px; }
+.detail-section { margin-bottom: 18px; }
+.detail-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #9aa5b8; margin-bottom: 8px; border-bottom: 1px solid #f0f2f8; padding-bottom: 4px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.detail-field-label { font-size: 11px; color: #9aa5b8; margin-bottom: 2px; }
+.detail-field-value { font-size: 13px; color: #1a1a2e; line-height: 1.5; }
+.detail-field-value a { color: #4f6ef7; text-decoration: none; }
+.detail-field-value a:hover { text-decoration: underline; }
+.val-block { background: #f8f9fc; border-radius: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid #e8eaf0; }
+.val-block-title { font-size: 11px; font-weight: 600; color: #7a8299; margin-bottom: 6px; }
+.empty-state { text-align: center; padding: 40px; color: #9aa5b8; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-icon">Ab</div>
+  <div>
+    <div class="logo-title">BICAN Antibody Repository</div>
+    <div class="logo-sub">Brain Initiative Cell Atlas Network &nbsp;·&nbsp; Addgene</div>
+  </div>
+  <div class="last-updated" id="lastUpdated"></div>
+</header>
+
+<div id="loadingState" class="state-wrap">
+  <div class="state-msg">
+    <div class="spinner"></div>
+    Loading antibody data…
+  </div>
+</div>
+
+<div id="mainUI" style="display:none;">
+  <div class="top-bar">
+    <div class="search-wrap">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="searchInput" placeholder="Search name, target, vendor, RRID...">
+    </div>
+    <select id="filterSpecies"><option value="">All Species</option></select>
+    <select id="filterHost"><option value="">All Host Organisms</option></select>
+    <select id="filterFormat"><option value="">All Formats</option></select>
+    <select id="filterApp"><option value="">All Applications</option></select>
+    <button class="btn-reset" onclick="resetFilters()">Reset</button>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-card"><div class="stat-label">Total Antibodies</div><div class="stat-value" id="statTotal">—</div></div>
+    <div class="stat-card"><div class="stat-label">Unique Targets</div><div class="stat-value" id="statTargets">—</div></div>
+    <div class="stat-card"><div class="stat-label">With Validation Data</div><div class="stat-value" id="statValidated">—</div></div>
+    <div class="stat-card"><div class="stat-label">Vendors</div><div class="stat-value" id="statVendors">—</div></div>
+    <div class="stat-card"><div class="stat-label">Species</div><div class="stat-value" id="statSpecies">—</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="result-count" id="resultCount"></div>
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortBy('num')"># <span class="sort-arrow" id="sort-num">&#8597;</span></th>
+          <th onclick="sortBy('antibodyName')">Antibody Name <span class="sort-arrow" id="sort-antibodyName">&#8597;</span></th>
+          <th onclick="sortBy('targetName')">Target / Biomarker <span class="sort-arrow" id="sort-targetName">&#8597;</span></th>
+          <th onclick="sortBy('uniprotAcc')">UniProt <span class="sort-arrow" id="sort-uniprotAcc">&#8597;</span></th>
+          <th>Target Species</th>
+          <th onclick="sortBy('hostIsotype')">Host &amp; Isotype <span class="sort-arrow" id="sort-hostIsotype">&#8597;</span></th>
+          <th onclick="sortBy('format')">Format <span class="sort-arrow" id="sort-format">&#8597;</span></th>
+          <th onclick="sortBy('vendor')">Vendor <span class="sort-arrow" id="sort-vendor">&#8597;</span></th>
+          <th>Catalog #</th>
+          <th>RRID</th>
+          <th>Applications</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Detail overlay -->
+<div class="overlay" id="overlay" onclick="closeDetail(event)">
+  <div class="detail-panel" id="detailPanel">
+    <button class="detail-close" onclick="document.getElementById('overlay').classList.remove('open')">&#10005;</button>
+    <div id="detailContent"></div>
+  </div>
+</div>
+
+<script>
+// ── CONFIGURATION ────────────────────────────────────────────────────────────
+// When hosted on GitHub Pages, this path is relative — just keep it as-is.
+// Place your exported CSV file named exactly "data.csv" in the same folder.
+const DATA_URL = "data.csv";
+// ─────────────────────────────────────────────────────────────────────────────
+
+let rawData = [], filtered = [], sortCol = "", sortDir = 1;
+
+function parseApps(str) {
+  if (!str) return [];
+  return str.split(/[,;\/\n]/).map(s => s.trim()).filter(Boolean);
+}
+
+function parseRow(row) {
+  const g = k => (row[k] || "").toString().trim();
+  return {
+    num:           g("Number"),
+    antibodyName:  g("Antibody Name"),
+    uniprotAcc:    g("UniProt Accession Number (Target Ag)"),
+    targetName:    g("Target Name / Protein Biomarker"),
+    agNotes:       g("Ag notes (Epitope or Modified forms)"),
+    targetSpecies: parseApps(g("Target Species")),
+    hostIsotype:   g("Host Organism & Isotype"),
+    format:        g("Format (recombinant? monoclonal?)"),
+    vendor:        g("Vendor"),
+    catalogNum:    g("Catalog Number (and link)"),
+    rrid:          g("RRID"),
+    apps:          parseApps(g("Validated in these applications")),
+    valData1:      g("Validation Data link and notes"),
+    valBy1:        g("Validated By"),
+    valData2:      g("1. Validation Data link and notes "),
+    valBy2:        g("1. Validated By"),
+    valData3:      g("2. Validation Data link and notes"),
+    valBy3:        g("2. Validated By"),
+  };
+}
+
+function isUrl(s) { return s && (s.startsWith("http://") || s.startsWith("https://")); }
+
+async function loadData() {
+  try {
+    const resp = await fetch(DATA_URL + "?v=" + Date.now());
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const csv = await resp.text();
+    Papa.parse(csv, {
+      header: true,
+      skipEmptyLines: true,
+      complete: function(result) {
+        rawData = result.data.map(parseRow).filter(r => r.antibodyName);
+        filtered = [...rawData];
+        document.getElementById("loadingState").style.display = "none";
+        document.getElementById("mainUI").style.display = "block";
+        document.getElementById("lastUpdated").textContent = "Data loaded " + new Date().toLocaleDateString(undefined, {month:"short",day:"numeric",year:"numeric"});
+        populateFilters();
+        updateStats();
+        render();
+      }
+    });
+  } catch(e) {
+    document.getElementById("loadingState").innerHTML = `
+      <div class="state-msg error">
+        <div class="icon">&#9888;</div>
+        <strong>Could not load antibody data.</strong><br>
+        <span style="font-size:12px;color:#999;margin-top:6px;display:block;">${e.message}</span>
+      </div>`;
+  }
+}
+
+function render() {
+  const tbody = document.getElementById("tableBody");
+  const rc = document.getElementById("resultCount");
+  rc.textContent = `${filtered.length} of ${rawData.length} antibodies`;
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="12" class="empty-state">No antibodies match your filters.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map((r, i) => `
+    <tr class="clickable" onclick="showDetail(${rawData.indexOf(r)})">
+      <td style="color:#9aa5b8;font-size:12px;">${r.num || i+1}</td>
+      <td style="font-weight:500;color:#2a2e4a;min-width:160px;">${r.antibodyName}</td>
+      <td style="min-width:140px;">${r.targetName || '<span class="empty-val">—</span>'}</td>
+      <td>${r.uniprotAcc ? `<a class="uniprot-link" href="https://www.uniprot.org/uniprot/${r.uniprotAcc}" target="_blank" onclick="event.stopPropagation()">${r.uniprotAcc}</a>` : '<span class="empty-val">—</span>'}</td>
+      <td><div class="app-tags">${r.targetSpecies.map(s=>`<span class="app-tag">${s}</span>`).join("") || '<span class="empty-val">—</span>'}</div></td>
+      <td><span class="truncate" title="${r.hostIsotype}">${r.hostIsotype || '<span class="empty-val">—</span>'}</span></td>
+      <td>${r.format || '<span class="empty-val">—</span>'}</td>
+      <td>${r.vendor || '<span class="empty-val">—</span>'}</td>
+      <td style="font-family:monospace;font-size:12px;">${r.catalogNum || '<span class="empty-val">—</span>'}</td>
+      <td>${r.rrid ? `<a class="rrid-link" href="https://scicrunch.org/resolver/${r.rrid}" target="_blank" onclick="event.stopPropagation()">${r.rrid}</a>` : '<span class="empty-val">—</span>'}</td>
+      <td><div class="app-tags">${r.apps.map(a=>`<span class="app-tag">${a}</span>`).join("") || '<span class="empty-val">—</span>'}</div></td>
+      <td><button class="detail-btn" onclick="event.stopPropagation();showDetail(${rawData.indexOf(r)})">View &#8594;</button></td>
+    </tr>`).join("");
+}
+
+function showDetail(idx) {
+  const r = rawData[idx];
+  const field = (label, val, link) => {
+    const display = val || '<span style="color:#c0c5d8;font-style:italic;">Not provided</span>';
+    const wrapped = (link && val) ? `<a href="${link}" target="_blank">${val}</a>` : display;
+    return `<div class="detail-field"><div class="detail-field-label">${label}</div><div class="detail-field-value">${wrapped}</div></div>`;
+  };
+  const valBlock = (title, data, by) => {
+    if (!data && !by) return "";
+    const dataHtml = data ? (isUrl(data) ? `<a href="${data}" target="_blank">View validation data &#8599;</a>` : `<span style="font-size:12px;line-height:1.5;">${data}</span>`) : '<span style="color:#c0c5d8;font-style:italic;font-size:12px;">No link provided</span>';
+    return `<div class="val-block">
+      <div class="val-block-title">${title}</div>
+      <div style="font-size:12px;color:#2a2e4a;margin-bottom:4px;">${dataHtml}</div>
+      ${by ? `<div style="font-size:11px;color:#7a8299;">Validated by: <strong>${by}</strong></div>` : ""}
+    </div>`;
+  };
+  document.getElementById("detailContent").innerHTML = `
+    <div class="detail-name">${r.antibodyName}</div>
+    <div class="detail-sub">${[r.targetName, r.hostIsotype, r.format].filter(Boolean).join(" &nbsp;·&nbsp; ")}</div>
+    <div class="detail-section">
+      <div class="detail-section-title">Target Information</div>
+      <div class="detail-grid">
+        ${field("Target / Biomarker", r.targetName)}
+        ${field("UniProt Accession", r.uniprotAcc, r.uniprotAcc ? `https://www.uniprot.org/uniprot/${r.uniprotAcc}` : null)}
+        ${field("Target Species", r.targetSpecies.join(", "))}
+        ${field("Ag Notes (Epitope)", r.agNotes)}
+      </div>
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">Antibody Details</div>
+      <div class="detail-grid">
+        ${field("Host Organism & Isotype", r.hostIsotype)}
+        ${field("Format", r.format)}
+        ${field("Vendor", r.vendor)}
+        ${field("Catalog Number", r.catalogNum)}
+        ${field("RRID", r.rrid, r.rrid ? `https://scicrunch.org/resolver/${r.rrid}` : null)}
+        ${field("Applications", r.apps.join(", "))}
+      </div>
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">Validation Data</div>
+      ${valBlock("Primary Validation", r.valData1, r.valBy1)}
+      ${valBlock("Validation Entry 2", r.valData2, r.valBy2)}
+      ${valBlock("Validation Entry 3", r.valData3, r.valBy3)}
+      ${!r.valData1 && !r.valData2 && !r.valData3 ? '<p style="font-size:13px;color:#c0c5d8;font-style:italic;">No validation data recorded.</p>' : ""}
+    </div>`;
+  document.getElementById("overlay").classList.add("open");
+}
+
+function closeDetail(e) {
+  if (e.target === document.getElementById("overlay")) document.getElementById("overlay").classList.remove("open");
+}
+
+function updateStats() {
+  document.getElementById("statTotal").textContent = rawData.length;
+  document.getElementById("statTargets").textContent = new Set(rawData.map(r=>r.targetName).filter(Boolean)).size;
+  document.getElementById("statValidated").textContent = rawData.filter(r=>r.valData1||r.valData2||r.valData3).length;
+  document.getElementById("statVendors").textContent = new Set(rawData.map(r=>r.vendor).filter(Boolean)).size;
+  document.getElementById("statSpecies").textContent = new Set(rawData.flatMap(r=>r.targetSpecies).filter(Boolean)).size;
+}
+
+function populateFilters() {
+  const fill = (id, vals, label) => {
+    const el = document.getElementById(id);
+    el.innerHTML = `<option value="">All ${label}</option>`;
+    [...new Set(vals)].filter(Boolean).sort().forEach(v => {
+      const o = document.createElement("option"); o.value = v; o.textContent = v; el.appendChild(o);
+    });
+  };
+  fill("filterSpecies", rawData.flatMap(r=>r.targetSpecies), "Species");
+  fill("filterHost", rawData.map(r=>r.hostIsotype), "Host/Isotype");
+  fill("filterFormat", rawData.map(r=>r.format), "Formats");
+  fill("filterApp", rawData.flatMap(r=>r.apps), "Applications");
+}
+
+function applyFilters() {
+  const q = document.getElementById("searchInput").value.toLowerCase();
+  const sp = document.getElementById("filterSpecies").value;
+  const ho = document.getElementById("filterHost").value;
+  const fm = document.getElementById("filterFormat").value;
+  const ap = document.getElementById("filterApp").value;
+  filtered = rawData.filter(r => {
+    const text = [r.antibodyName,r.targetName,r.uniprotAcc,r.vendor,r.catalogNum,r.rrid,r.hostIsotype,r.format].join(" ").toLowerCase();
+    return (!q || text.includes(q))
+      && (!sp || r.targetSpecies.includes(sp))
+      && (!ho || r.hostIsotype === ho)
+      && (!fm || r.format === fm)
+      && (!ap || r.apps.includes(ap));
+  });
+  render();
+}
+
+function resetFilters() {
+  document.getElementById("searchInput").value = "";
+  ["filterSpecies","filterHost","filterFormat","filterApp"].forEach(id => document.getElementById(id).value = "");
+  filtered = [...rawData];
+  render();
+}
+
+function sortBy(col) {
+  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = 1; }
+  document.querySelectorAll(".sort-arrow").forEach(el => el.innerHTML = "&#8597;");
+  const arrow = document.getElementById("sort-" + col);
+  if (arrow) arrow.innerHTML = sortDir === 1 ? "&#8593;" : "&#8595;";
+  filtered.sort((a, b) => {
+    const av = (Array.isArray(a[col]) ? a[col].join() : a[col]||"").toLowerCase();
+    const bv = (Array.isArray(b[col]) ? b[col].join() : b[col]||"").toLowerCase();
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  });
+  render();
+}
+
+["searchInput","filterSpecies","filterHost","filterFormat","filterApp"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) { el.addEventListener("input", applyFilters); el.addEventListener("change", applyFilters); }
+});
+
+loadData();
+</script>
+</body>
+</html>
